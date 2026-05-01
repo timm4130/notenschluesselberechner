@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Notenschlüsselberechner – NCG</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.min.js"></script>
     <style>
         :root {
             --primary: #a32323;
@@ -391,6 +391,24 @@
                 <option value="sek2">Sekundarstufe II (15–0 Notenpunkte)</option>
             </select>
         </div>
+        <div class="setting-item full-row">
+            <label class="label-row">
+                <span>Berechnungsmodus</span>
+                <button type="button" class="info-btn" aria-label="Erklärung anzeigen" onclick="toggleInfo(event, 'modusInfo')">i</button>
+            </label>
+            <select id="modus" onchange="onModusChange()">
+                <option value="linear" selected>Linear (gleichmäßige Punktverteilung)</option>
+                <option value="sockel-oben">Sockel oben (leichter)</option>
+                <option value="sockel-unten">Sockel unten (schwerer)</option>
+                <option value="kmk">KMK-Abiturvorgabe (nur Sek II)</option>
+            </select>
+        </div>
+        <div class="info-panel full-row" id="modusInfo" hidden>
+            <strong>Linear (gleichmäßige Punktverteilung):</strong> Punkte werden gleichmäßig verteilt; bei der Defizitschwelle wird scharf zwischen letzter ausreichender und erster mangelhafter Note geschnitten.<br>
+            <strong>Sockel oben (leichter):</strong> Die Bestnote wird schon ab einer großzügigen Schwelle vergeben (etwa ab 90 % der Punkte) – Schüler:innen können auch ohne Maximalpunktzahl die Bestnote erreichen.<br>
+            <strong>Sockel unten (schwerer):</strong> Die schlechteste Note wird nur bei sehr wenigen Punkten vergeben (z. B. unter 10 %); ansonsten verschiebt sich der Notenschlüssel etwas nach oben.<br>
+            <strong>KMK-Abiturvorgabe:</strong> Offizielle Vorgabe für Abiturklausuren in Sek II – feste Schwellen (95 %, 85 %, 75 %, 65 %, 55 %, 45 %, 20 %), Defizitschwelle ist auf 45 % fixiert.
+        </div>
         <div class="setting-item">
             <label>Max. Punkte</label>
             <input type="number" id="maxPoints" value="60" min="1" max="500" step="1" inputmode="numeric" oninput="recalcAll()">
@@ -409,26 +427,9 @@
                 <option value="ja">Mit Tendenzen</option>
             </select>
         </div>
-        <div class="setting-item">
-            <label class="label-row">
-                <span>Punkte anhäufen</span>
-                <button type="button" class="info-btn" aria-label="Erklärung anzeigen" onclick="toggleInfo(event, 'anhaeufenInfo')">i</button>
-            </label>
-            <select id="anhaeufen" onchange="recalcAll()">
-                <option value="oben">oben</option>
-                <option value="mittig" selected>mittig</option>
-                <option value="unten">unten</option>
-            </select>
-        </div>
         <div class="info-panel full-row" id="defizitInfo" hidden>
             Prozentsatz der Punktzahl, bei der letztmalig eine ausreichende Note vergeben werden soll
             (Sek I: 4 bzw. 4–, Sek II: 5 Punkte).
-        </div>
-        <div class="info-panel full-row" id="anhaeufenInfo" hidden>
-            Die Punkte werden möglichst gleichmäßig auf die Notenstufen verteilt.
-            Geht das nicht ohne Rest auf, legt diese Option fest, wo die überschüssigen
-            Punkte angehäuft werden – also welche Notenstufen einen oder mehrere Punkte
-            mehr abdecken.
         </div>
     </div>
 
@@ -491,12 +492,6 @@
                 <input type="range" id="colWidth" min="24" max="160" step="2" value="50" oninput="updateLayout()">
                 <span class="value-out" id="colWidthOut">50 px</span>
             </div>
-        </div>
-        <div class="setting-item full-row checkbox-item" id="sekEqWrap">
-            <label class="checkbox-label">
-                <input type="checkbox" id="sekEquivalence" onchange="renderTable()">
-                <span>Sek-I-Entsprechung bei runden Noten anzeigen <small style="opacity:0.65">(nur Sek II)</small></span>
-            </label>
         </div>
         <div class="setting-item">
             <label>Kopfzeile-Farbe</label>
@@ -586,6 +581,7 @@ function distributeRange(totalValues, numLevels, accum) {
 
 function getLevels(stufe, tendenz) {
     if (stufe === 'sek1') {
+        // Sek I: immer Wortlabels, mit/ohne Tendenzen
         const wordMap = {
             '1': 'sehr gut',
             '2': 'gut',
@@ -609,10 +605,16 @@ function getLevels(stufe, tendenz) {
             passingCount: tendenz ? 12 : 4
         };
     }
-    // Sek2: 15 ... 0
+    // Sek2: 15 ... 0 — Wortbeschriftung NUR an "ganzen" Noten (14, 11, 8, 5, 2, 0)
+    const sek2Words = {
+        14: 'sehr gut', 11: 'gut', 8: 'befriedigend',
+        5: 'ausreichend', 2: 'mangelhaft', 0: 'ungenügend'
+    };
     const labels = [];
-    for (let i = 15; i >= 0; i--) labels.push(String(i));
-    return { labels, passingCount: 11 };
+    for (let i = 15; i >= 0; i--) {
+        labels.push(sek2Words[i] ? `${i} (${sek2Words[i]})` : String(i));
+    }
+    return { labels, passingCount: 11 }; // 15..5 passing, 4..0 fail
 }
 
 function fmt(v) {
@@ -622,63 +624,188 @@ function fmt(v) {
 
 let lastRanges = []; // gespeicherte Berechnung für renderTable
 
-function recalcAll() {
-    const max = parseFloat(document.getElementById('maxPoints').value);
-    const threshPct = parseFloat(document.getElementById('defizit').value);
-    const stufe = document.getElementById('stufe').value;
-    const tendenz = document.getElementById('tendenz').value === 'ja';
-    const accum = document.getElementById('anhaeufen').value;
+// ---------------- Berechnung ----------------
 
-    if (!max || max <= 0 || isNaN(threshPct)) { lastRanges = []; renderTable(); return; }
-
-    const step = 1; // halbe Punkte entfernt
-    const totalValues = Math.round(max / step) + 1; // 0..max in step units
-    let threshIdx = Math.ceil((max * threshPct / 100) / step);
+// Linearer Modus: gleichmäßig verteilen mit fester Schwelle
+function computeLinear(max, threshPct, accum, labels, passingCount) {
+    const totalValues = max + 1;
+    let threshIdx = Math.ceil(max * threshPct / 100);
     if (threshIdx < 0) threshIdx = 0;
     if (threshIdx > totalValues - 1) threshIdx = totalValues - 1;
-
-    const passingValues = totalValues - threshIdx; // Werte >= Schwelle (inkl. Schwelle)
-    const failingValues = threshIdx; // Werte < Schwelle
-
-    const { labels, passingCount } = getLevels(stufe, tendenz);
+    const passingValues = totalValues - threshIdx;
+    const failingValues = threshIdx;
     const failingCount = labels.length - passingCount;
 
     const passingSizes = distributeRange(passingValues, passingCount, accum);
     const failingSizes = distributeRange(failingValues, failingCount, accum);
 
     const ranges = [];
-    let highIdx = totalValues - 1; // höchster Index = max
-
+    let highIdx = totalValues - 1;
     for (let i = 0; i < passingCount; i++) {
         const size = passingSizes[i];
-        if (size <= 0) {
-            ranges.push({ label: labels[i], lower: null, upper: null, isPassing: true });
-            continue;
-        }
+        if (size <= 0) { ranges.push({ label: labels[i], lower: null, upper: null, isPassing: true }); continue; }
         const lowIdx = highIdx - size + 1;
-        ranges.push({
-            label: labels[i],
-            lower: lowIdx * step,
-            upper: highIdx * step,
-            isPassing: true
-        });
+        ranges.push({ label: labels[i], lower: lowIdx, upper: highIdx, isPassing: true });
         highIdx = lowIdx - 1;
     }
-
     for (let i = 0; i < failingCount; i++) {
         const size = failingSizes[i];
-        if (size <= 0) {
-            ranges.push({ label: labels[passingCount + i], lower: null, upper: null, isPassing: false });
+        if (size <= 0) { ranges.push({ label: labels[passingCount + i], lower: null, upper: null, isPassing: false }); continue; }
+        const lowIdx = highIdx - size + 1;
+        ranges.push({ label: labels[passingCount + i], lower: Math.max(lowIdx, 0), upper: highIdx, isPassing: false });
+        highIdx = lowIdx - 1;
+    }
+    return ranges;
+}
+
+// Sockel-Modus: harter Sockel oben (Bestnote ab X%) oder unten (schlechteste Note unter Y%)
+// Dazwischen lineare Verteilung über alle übrigen Stufen, mit Defizitschwelle als Knick.
+function computeSockel(max, threshPct, accum, labels, passingCount, sockelMode) {
+    const totalValues = max + 1;
+    const failingCount = labels.length - passingCount;
+
+    // Sockel-Schwellen
+    const SOCKEL_OBEN_PCT = 90; // Bestnote schon ab 90 %
+    const SOCKEL_UNTEN_PCT = 10; // schlechteste Note nur unter 10 %
+
+    if (sockelMode === 'oben') {
+        // Bestnote: alle Werte >= 90% von max
+        const sockelStart = Math.ceil(max * SOCKEL_OBEN_PCT / 100);
+        const sockelSize = totalValues - sockelStart; // Werte sockelStart..max
+        // Defizitschwelle nach unten verschieben? Nein: Schwelle bleibt absolut.
+        let threshIdx = Math.ceil(max * threshPct / 100);
+        if (threshIdx > sockelStart - 1) threshIdx = sockelStart - 1;
+
+        const passingValues = sockelStart - threshIdx; // Werte threshIdx..sockelStart-1
+        const failingValues = threshIdx;
+
+        // Top-Note bekommt den Sockel; restliche passingCount-1 Stufen verteilen passingValues
+        const restPassing = passingCount - 1;
+        const passingSizes = restPassing > 0
+            ? distributeRange(passingValues, restPassing, accum)
+            : [];
+        const failingSizes = distributeRange(failingValues, failingCount, accum);
+
+        const ranges = [];
+        let highIdx = totalValues - 1;
+        // Top-Note (Sockel)
+        ranges.push({
+            label: labels[0],
+            lower: sockelStart,
+            upper: highIdx,
+            isPassing: true
+        });
+        highIdx = sockelStart - 1;
+        for (let i = 0; i < restPassing; i++) {
+            const size = passingSizes[i];
+            if (size <= 0) { ranges.push({ label: labels[i + 1], lower: null, upper: null, isPassing: true }); continue; }
+            const lowIdx = highIdx - size + 1;
+            ranges.push({ label: labels[i + 1], lower: lowIdx, upper: highIdx, isPassing: true });
+            highIdx = lowIdx - 1;
+        }
+        for (let i = 0; i < failingCount; i++) {
+            const size = failingSizes[i];
+            if (size <= 0) { ranges.push({ label: labels[passingCount + i], lower: null, upper: null, isPassing: false }); continue; }
+            const lowIdx = highIdx - size + 1;
+            ranges.push({ label: labels[passingCount + i], lower: Math.max(lowIdx, 0), upper: highIdx, isPassing: false });
+            highIdx = lowIdx - 1;
+        }
+        return ranges;
+    }
+
+    // sockelMode === 'unten'
+    // Schlechteste Note: alle Werte < 10 % (Sockel unten)
+    const sockelTop = Math.floor(max * SOCKEL_UNTEN_PCT / 100); // Werte 0..sockelTop-1 = schlechteste Note
+    const sockelSize = sockelTop; // Anzahl Werte für die schlechteste Note
+    let threshIdx = Math.ceil(max * threshPct / 100);
+    if (threshIdx < sockelTop) threshIdx = sockelTop;
+
+    const passingValues = totalValues - threshIdx;
+    const failingValues = threshIdx - sockelTop; // Werte sockelTop..threshIdx-1
+    const restFailing = failingCount - 1;
+
+    const passingSizes = distributeRange(passingValues, passingCount, accum);
+    const failingSizes = restFailing > 0 ? distributeRange(failingValues, restFailing, accum) : [];
+
+    const ranges = [];
+    let highIdx = totalValues - 1;
+    for (let i = 0; i < passingCount; i++) {
+        const size = passingSizes[i];
+        if (size <= 0) { ranges.push({ label: labels[i], lower: null, upper: null, isPassing: true }); continue; }
+        const lowIdx = highIdx - size + 1;
+        ranges.push({ label: labels[i], lower: lowIdx, upper: highIdx, isPassing: true });
+        highIdx = lowIdx - 1;
+    }
+    for (let i = 0; i < restFailing; i++) {
+        const size = failingSizes[i];
+        if (size <= 0) { ranges.push({ label: labels[passingCount + i], lower: null, upper: null, isPassing: false }); continue; }
+        const lowIdx = highIdx - size + 1;
+        ranges.push({ label: labels[passingCount + i], lower: Math.max(lowIdx, sockelTop), upper: highIdx, isPassing: false });
+        highIdx = lowIdx - 1;
+    }
+    // Schlechteste Note (Sockel unten)
+    if (sockelSize > 0) {
+        ranges.push({ label: labels[labels.length - 1], lower: 0, upper: sockelTop - 1, isPassing: false });
+    } else {
+        ranges.push({ label: labels[labels.length - 1], lower: null, upper: null, isPassing: false });
+    }
+    return ranges;
+}
+
+// KMK-Abiturvorgabe (nur Sek II, 16 Notenpunkt-Stufen)
+// Offizielle Schwellen: 95/90/85/80/75/70/65/60/55/50/45/40/33/27/20% — darunter 0 NP
+function computeKMK(max, labels) {
+    // KMK-Tabelle: untere Grenze (in % von max) für jede Note 15..1, NP 0 = Rest
+    // Quelle: KMK-Standard für allgemeine Hochschulreife, gerundet (an Schule etabliert)
+    const kmkPercents = [95, 90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 33, 27, 20];
+    // Index 0 = Untergrenze für NP 15, Index 14 = Untergrenze für NP 1, NP 0 darunter
+    const ranges = [];
+    let highIdx = max;
+    for (let i = 0; i < kmkPercents.length; i++) {
+        const lowIdx = Math.ceil(max * kmkPercents[i] / 100);
+        const isPassing = (15 - i) >= 5; // NP 5+ = passing
+        if (lowIdx > highIdx) {
+            ranges.push({ label: labels[i], lower: null, upper: null, isPassing });
             continue;
         }
-        const lowIdx = highIdx - size + 1;
-        ranges.push({
-            label: labels[passingCount + i],
-            lower: Math.max(lowIdx, 0) * step,
-            upper: highIdx * step,
-            isPassing: false
-        });
+        ranges.push({ label: labels[i], lower: lowIdx, upper: highIdx, isPassing });
         highIdx = lowIdx - 1;
+    }
+    // NP 0
+    if (highIdx >= 0) {
+        ranges.push({ label: labels[15], lower: 0, upper: highIdx, isPassing: false });
+    } else {
+        ranges.push({ label: labels[15], lower: null, upper: null, isPassing: false });
+    }
+    return ranges;
+}
+
+function recalcAll() {
+    const max = parseInt(document.getElementById('maxPoints').value, 10);
+    const threshPct = parseInt(document.getElementById('defizit').value, 10);
+    const stufe = document.getElementById('stufe').value;
+    const tendenz = document.getElementById('tendenz').value === 'ja';
+    const accum = 'mittig'; // Restpunkte werden mittig verteilt (festes Verhalten)
+    const modus = document.getElementById('modus').value;
+
+    if (!max || max <= 0 || isNaN(threshPct)) { lastRanges = []; renderTable(); return; }
+
+    const { labels, passingCount } = getLevels(stufe, tendenz);
+
+    let ranges;
+    if (modus === 'kmk') {
+        if (stufe !== 'sek2') {
+            // Fallback: linear, falls KMK in Sek I gewählt wäre (sollte UI verhindern)
+            ranges = computeLinear(max, threshPct, accum, labels, passingCount);
+        } else {
+            ranges = computeKMK(max, labels);
+        }
+    } else if (modus === 'sockel-oben') {
+        ranges = computeSockel(max, threshPct, accum, labels, passingCount, 'oben');
+    } else if (modus === 'sockel-unten') {
+        ranges = computeSockel(max, threshPct, accum, labels, passingCount, 'unten');
+    } else {
+        ranges = computeLinear(max, threshPct, accum, labels, passingCount);
     }
 
     lastRanges = ranges;
@@ -696,29 +823,11 @@ function renderTable() {
     const labelHeader = stufe === 'sek1' ? 'Note' : 'Notenpunkte';
     const valueHeader = 'Punkte';
 
-    // Sek-I-Entsprechung bei runden Noten der Sek II
-    const sekEqCB = document.getElementById('sekEquivalence');
-    const sekEqWrap = document.getElementById('sekEqWrap');
-    const showEq = stufe === 'sek2' && sekEqCB.checked;
-    // Checkbox ausgrauen, wenn nicht in Sek II
-    if (stufe === 'sek2') {
-        sekEqCB.disabled = false;
-        sekEqWrap.classList.remove('disabled');
-    } else {
-        sekEqCB.disabled = true;
-        sekEqWrap.classList.add('disabled');
-    }
-
-    const sek2EquivMap = {
-        '14': 'sehr gut',
-        '11': 'gut',
-        '8':  'befriedigend',
-        '5':  'ausreichend',
-        '2':  'mangelhaft',
-        '0':  'ungenügend'
-    };
+    // Wortteile in Sek-II-Labels (z. B. "14 (sehr gut)") dezent stylen
     const decorate = (label) => {
-        if (showEq && sek2EquivMap[label]) return `${label}<span class="eq">(${sek2EquivMap[label]})</span>`;
+        // Trennt am ersten "(" und packt den Wortteil in einen .eq-Span
+        const m = label.match(/^([^(]+?)\u00a0?\(([^)]+)\)$/);
+        if (m) return `${m[1]}<span class="eq">(${m[2]})</span>`;
         return label;
     };
 
@@ -785,11 +894,42 @@ function toggleSection(sectionId, toggleId) {
     toggle.setAttribute('aria-expanded', String(isHidden));
 }
 
+function onModusChange() {
+    const modus = document.getElementById('modus').value;
+    const stufeSel = document.getElementById('stufe');
+    // KMK ist nur in Sek II sinnvoll → bei Bedarf umschalten
+    if (modus === 'kmk' && stufeSel.value !== 'sek2') {
+        stufeSel.value = 'sek2';
+    }
+    syncFieldStates();
+    recalcAll();
+}
+
 function onStufeChange() {
     const stufe = document.getElementById('stufe').value;
+    const modusSel = document.getElementById('modus');
+    // KMK-Option deaktivieren, wenn Sek I; ggf. auf Linear zurückfallen
+    const kmkOption = modusSel.querySelector('option[value="kmk"]');
+    if (stufe === 'sek1') {
+        kmkOption.disabled = true;
+        if (modusSel.value === 'kmk') modusSel.value = 'linear';
+    } else {
+        kmkOption.disabled = false;
+    }
+    syncFieldStates();
+    recalcAll();
+}
+
+function syncFieldStates() {
+    const stufe = document.getElementById('stufe').value;
+    const modus = document.getElementById('modus').value;
     const tendenzSel = document.getElementById('tendenz');
     const tendenzItem = tendenzSel.closest('.setting-item');
-    if (stufe === 'sek2') {
+    const defizitInput = document.getElementById('defizit');
+    const defizitItem = defizitInput.closest('.setting-item');
+
+    // Tendenzen: in Sek II nicht relevant, im KMK-Modus nicht relevant
+    if (stufe === 'sek2' || modus === 'kmk') {
         tendenzSel.value = 'nein';
         tendenzSel.disabled = true;
         tendenzItem.classList.add('disabled');
@@ -797,7 +937,16 @@ function onStufeChange() {
         tendenzSel.disabled = false;
         tendenzItem.classList.remove('disabled');
     }
-    recalcAll();
+
+    // Defizitschwelle: im KMK-Modus fix auf 45 % und ausgegraut
+    if (modus === 'kmk') {
+        defizitInput.value = 45;
+        defizitInput.disabled = true;
+        defizitItem.classList.add('disabled');
+    } else {
+        defizitInput.disabled = false;
+        defizitItem.classList.remove('disabled');
+    }
 }
 
 function updateTableStyle() {
@@ -853,35 +1002,51 @@ async function exportImage() {
     const btn = document.getElementById('exportBtn');
     const format = document.getElementById('format').value;
     const target = document.getElementById('exportTarget');
-    const mime = format === 'jpg' ? 'image/jpeg' : 'image/png';
 
     btn.disabled = true;
     const oldLabel = btn.textContent;
     btn.textContent = 'Exportiere…';
 
+    // Ist die Library geladen?
+    if (typeof htmlToImage === 'undefined') {
+        alert('Bild-Bibliothek konnte nicht geladen werden. Bitte Internetverbindung prüfen und Seite neu laden.');
+        btn.disabled = false;
+        btn.textContent = oldLabel;
+        return;
+    }
+
     try {
+        // Scroll-Wrapper kurz auf "visible" setzen, damit alles im Bild landet
         const scrollEl = target.querySelector('.table-scroll');
         const originalOverflow = scrollEl.style.overflowX;
         scrollEl.style.overflowX = 'visible';
 
-        const canvas = await html2canvas(target, {
+        // html-to-image: kein document-clone, funktioniert auch auf iOS
+        const opts = {
             backgroundColor: '#ffffff',
-            scale: 2,
-            useCORS: true,
-            logging: false,
-            windowWidth: document.documentElement.scrollWidth
-        });
+            pixelRatio: 2,
+            cacheBust: true,
+            // Inline alle Schriften und Bilder
+            skipFonts: false
+        };
+
+        let blob;
+        if (format === 'jpg') {
+            const dataUrl = await htmlToImage.toJpeg(target, { ...opts, quality: 0.95 });
+            blob = await (await fetch(dataUrl)).blob();
+        } else {
+            blob = await htmlToImage.toBlob(target, opts);
+        }
 
         scrollEl.style.overflowX = originalOverflow;
 
-        const blob = await new Promise(res => canvas.toBlob(res, mime, format === 'jpg' ? 0.95 : 1.0));
-        if (!blob) throw new Error('Bild konnte nicht erzeugt werden.');
+        if (!blob) throw new Error('Leeres Bild empfangen.');
 
         const stamp = new Date().toISOString().slice(0, 10);
         const filename = `notenschluessel_${stamp}.${format}`;
+        const mime = format === 'jpg' ? 'image/jpeg' : 'image/png';
 
-        // Web Share API NUR auf echten Mobilgeräten (iPhone/iPad/Android),
-        // auf macOS/Windows/Linux-Desktop immer direkter Download
+        // Web Share API nur auf echten Mobilgeräten
         if (isMobileDevice() && navigator.canShare) {
             const file = new File([blob], filename, { type: mime });
             if (navigator.canShare({ files: [file] })) {
@@ -890,12 +1055,11 @@ async function exportImage() {
                     return;
                 } catch (e) {
                     if (e.name === 'AbortError') return;
-                    // andere Fehler -> Fallback zum Download
                 }
             }
         }
 
-        // Klassischer Download (Desktop oder Fallback)
+        // Desktop: klassischer Download
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -905,8 +1069,8 @@ async function exportImage() {
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 1500);
     } catch (err) {
-        alert('Export fehlgeschlagen: ' + err.message);
-        console.error(err);
+        alert('Export fehlgeschlagen: ' + (err && err.message ? err.message : err));
+        console.error('Export error:', err);
     } finally {
         btn.disabled = false;
         btn.textContent = oldLabel;

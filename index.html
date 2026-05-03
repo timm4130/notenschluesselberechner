@@ -200,6 +200,32 @@
 
         .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
+        /* Wrapper für 1 oder mehrere Tabellen */
+        .table-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            justify-content: center;
+            align-items: flex-start;
+        }
+        .table-container > table { flex: 0 0 auto; }
+
+        /* Horizontal mit mehreren Zeilen: EINE Tabelle, Stapel durch dezenten Spacer getrennt */
+        .horizontal-multirow tr.head-row.subsequent th,
+        .horizontal-multirow tr.head-row.subsequent td {
+            border-top: 4px solid white; /* schmaler Trennstreifen zwischen den Stapeln */
+        }
+        /* Wenn das Design "Mit Linien" aktiv ist, soll der Trennstreifen sichtbar bleiben */
+        .horizontal-multirow.with-lines tr.head-row.subsequent th,
+        .horizontal-multirow.with-lines tr.head-row.subsequent td {
+            border-top: 4px solid var(--card-bg);
+        }
+        /* Leere Auffüll-Zellen unsichtbar */
+        .horizontal-multirow .empty-cell {
+            background: transparent !important;
+            border-color: transparent !important;
+        }
+
         table {
             border-collapse: collapse;
             font-size: var(--table-font-size);
@@ -209,7 +235,9 @@
         }
         /* In vertikaler Ausrichtung soll die Tabelle nicht zwingend voll breit sein,
            damit Tabellenbreite-/Spaltenbreite-Slider tatsächlich schmale Tabellen erlauben */
-        .vertical-mode { width: auto; margin: 0 auto; }
+        /* In vertikaler Ausrichtung sollen die Tabellen kompakt zentriert stehen */
+        .table-container.vertical-mode > table { width: auto; }
+        .table-container.vertical-mode th, .table-container.vertical-mode td { text-align: left; }
         th, td {
             padding: var(--cell-padding-y) var(--cell-padding-x);
             text-align: center;
@@ -233,8 +261,6 @@
         .with-lines th { border-color: rgba(255,255,255,0.25); }
         .alt-colors tbody tr:nth-child(even) td:not(.row-label) { background-color: var(--light-gray); }
 
-        .vertical-mode th, .vertical-mode td { text-align: left; }
-
         /* Sek-I-Entsprechung bei Sek-II-Notenpunkten — dezent, leicht */
         .eq {
             display: inline-block;
@@ -245,7 +271,7 @@
             font-style: italic;
         }
         /* Im horizontalen Modus unter die Punktzahl stapeln, um Spaltenbreite zu sparen */
-        #resultTable:not(.vertical-mode) .eq {
+        .table-container:not(.vertical-mode) .eq {
             display: block;
             margin-left: 0;
             margin-top: 0.15em;
@@ -464,6 +490,13 @@
                 <option value="vertical" selected>Vertikal</option>
             </select>
         </div>
+        <div class="setting-item" id="horizRowsItem">
+            <label>Zeilen <small style="opacity:0.65">(horizontal)</small></label>
+            <select id="horizRows" onchange="renderTable()">
+                <option value="1" selected>1 Zeile</option>
+                <option value="2">2 Zeilen (gestapelt)</option>
+            </select>
+        </div>
         <div class="setting-item">
             <label>Design</label>
             <select id="design" onchange="updateTableStyle()">
@@ -515,10 +548,7 @@
                 </div>
             </div>
             <div class="table-scroll">
-                <table id="resultTable">
-                    <thead id="tableHead"></thead>
-                    <tbody id="tableBody"></tbody>
-                </table>
+                <div id="tableContainer" class="table-container"></div>
             </div>
         </div>
     </div>
@@ -819,22 +849,26 @@ function renderTable() {
     const stufe = document.getElementById('stufe').value;
     const thema = document.getElementById('thema').value.trim();
     const klasse = document.getElementById('klasse').value.trim();
+    const horizRows = parseInt(document.getElementById('horizRows').value, 10) || 1;
+
+    // Zeilen-Auswahl ist nur im Horizontal-Modus relevant — UI ggf. ausgrauen
+    const horizRowsItem = document.getElementById('horizRowsItem');
+    if (orientation === 'horizontal') {
+        horizRowsItem.classList.remove('disabled');
+        document.getElementById('horizRows').disabled = false;
+    } else {
+        horizRowsItem.classList.add('disabled');
+        document.getElementById('horizRows').disabled = true;
+    }
 
     const labelHeader = stufe === 'sek1' ? 'Note' : 'Notenpunkte';
     const valueHeader = 'Punkte';
 
-    // Wortteile in Sek-II-Labels (z. B. "14 (sehr gut)") dezent stylen
     const decorate = (label) => {
-        // Trennt am ersten "(" und packt den Wortteil in einen .eq-Span
         const m = label.match(/^([^(]+?)\u00a0?\(([^)]+)\)$/);
         if (m) return `${m[1]}<span class="eq">(${m[2]})</span>`;
         return label;
     };
-
-    const head = document.getElementById('tableHead');
-    const body = document.getElementById('tableBody');
-    head.innerHTML = '';
-    body.innerHTML = '';
 
     const cellContent = (r) => {
         if (r.lower === null) return '–';
@@ -842,29 +876,60 @@ function renderTable() {
         return fmt(r.upper) + ' bis ' + fmt(r.lower);
     };
 
-    if (orientation === 'horizontal') {
-        let trHead = `<tr><th class="row-label">${labelHeader}</th>`;
-        lastRanges.forEach(r => trHead += `<th>${decorate(r.label)}</th>`);
-        trHead += '</tr>';
-        head.innerHTML = trHead;
+    const container = document.getElementById('tableContainer');
+    container.innerHTML = '';
+    container.classList.remove('vertical-mode');
 
-        let trBody = `<tr><td class="row-label">${valueHeader}</td>`;
-        lastRanges.forEach(r => trBody += `<td>${cellContent(r)}</td>`);
-        trBody += '</tr>';
-        body.innerHTML = trBody;
+    if (orientation === 'horizontal') {
+        // Bei mehreren Zeilen die Stufen aufteilen — aber als EINE Tabelle rendern,
+        // damit Spaltenbreiten und vertikale Linien einheitlich sind.
+        const total = lastRanges.length;
+        const rows = Math.max(1, Math.min(horizRows, total));
+        const perRow = Math.ceil(total / rows);
+
+        const table = document.createElement('table');
+        table.classList.add('horizontal-multirow');
+        let html = '<tbody>';
+        for (let r = 0; r < rows; r++) {
+            const startIdx = r * perRow;
+            const endIdx = Math.min(startIdx + perRow, total);
+            const slice = lastRanges.slice(startIdx, endIdx);
+
+            // Header-Zeile: Label-Header + Stufen-Header, evtl. mit leeren Padding-Zellen
+            let trHead = `<tr class="head-row${r > 0 ? ' subsequent' : ''}"><th class="row-label">${labelHeader}</th>`;
+            slice.forEach(rg => trHead += `<th>${decorate(rg.label)}</th>`);
+            // Auffüllen mit leeren Zellen, falls letzte Zeile kürzer ist
+            for (let p = slice.length; p < perRow; p++) trHead += '<th class="empty-cell"></th>';
+            trHead += '</tr>';
+
+            // Werte-Zeile
+            let trBody = `<tr class="value-row"><td class="row-label">${valueHeader}</td>`;
+            slice.forEach(rg => trBody += `<td>${cellContent(rg)}</td>`);
+            for (let p = slice.length; p < perRow; p++) trBody += '<td class="empty-cell"></td>';
+            trBody += '</tr>';
+
+            html += trHead + trBody;
+        }
+        html += '</tbody>';
+        table.innerHTML = html;
+        container.appendChild(table);
     } else {
-        head.innerHTML = `<tr><th class="row-label">${labelHeader}</th><th>${valueHeader}</th></tr>`;
+        // Vertikal: eine einzige Tabelle, alle Stufen untereinander
+        container.classList.add('vertical-mode');
+        const table = document.createElement('table');
+        let head = `<tr><th class="row-label">${labelHeader}</th><th>${valueHeader}</th></tr>`;
+        let body = '';
         lastRanges.forEach(r => {
-            body.innerHTML += `<tr><td class="row-label">${decorate(r.label)}</td><td>${cellContent(r)}</td></tr>`;
+            body += `<tr><td class="row-label">${decorate(r.label)}</td><td>${cellContent(r)}</td></tr>`;
         });
+        table.innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
+        container.appendChild(table);
     }
 
-    // Titel = "Notenschlüssel" oder "Notenschlüssel: <Thema>"
     const titleEl = document.getElementById('exportTitle');
     const subEl = document.getElementById('exportSub');
     titleEl.textContent = thema ? `Notenschlüssel: ${thema}` : 'Notenschlüssel';
 
-    // Untertitel: nur Klasse, falls gesetzt
     if (klasse) {
         subEl.textContent = klasse;
         subEl.style.display = '';
@@ -873,7 +938,6 @@ function renderTable() {
         subEl.style.display = 'none';
     }
 
-    // Schul-Kopfzeile zeigen/verstecken
     const showHeader = document.getElementById('showHeader').checked;
     document.getElementById('exportHeader').hidden = !showHeader;
 
@@ -950,13 +1014,13 @@ function syncFieldStates() {
 }
 
 function updateTableStyle() {
-    const table = document.getElementById('resultTable');
+    const tables = document.querySelectorAll('#tableContainer table');
     const design = document.getElementById('design').value;
-    const orientation = document.getElementById('orientation').value;
-    table.className = '';
-    if (design === 'gray') table.classList.add('alt-colors');
-    if (design === 'lines') table.classList.add('with-lines');
-    if (orientation === 'vertical') table.classList.add('vertical-mode');
+    tables.forEach(table => {
+        table.className = '';
+        if (design === 'gray') table.classList.add('alt-colors');
+        if (design === 'lines') table.classList.add('with-lines');
+    });
 }
 
 function updateLayout() {
@@ -1015,19 +1079,56 @@ async function exportImage() {
         return;
     }
 
+    // Originale Styles für Aufräum-Phase merken
+    const scrollEl = target.querySelector('.table-scroll');
+    const orig = {
+        overflowX: scrollEl ? scrollEl.style.overflowX : '',
+        targetMaxWidth: target.style.maxWidth,
+        targetWidth: target.style.width
+    };
+
     try {
         // Scroll-Wrapper kurz auf "visible" setzen, damit alles im Bild landet
-        const scrollEl = target.querySelector('.table-scroll');
-        const originalOverflow = scrollEl.style.overflowX;
-        scrollEl.style.overflowX = 'visible';
+        if (scrollEl) scrollEl.style.overflowX = 'visible';
 
-        // html-to-image: kein document-clone, funktioniert auch auf iOS
+        // Tatsächliche Inhaltsbreite messen — die Tabelle KANN breiter sein als
+        // der Export-Target-Container. Deshalb echte Tabellenbreite ermitteln.
+        const tables = target.querySelectorAll('#tableContainer table');
+        let contentWidth = 0;
+        tables.forEach(t => {
+            const w = t.getBoundingClientRect().width;
+            if (w > contentWidth) contentWidth = w;
+        });
+
+        // Container-Padding berücksichtigen (links + rechts)
+        const cs = window.getComputedStyle(target);
+        const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+        const needed = Math.ceil(contentWidth + padX);
+
+        // Target temporär aufweiten, damit html-to-image den vollen Inhalt erfasst
+        if (needed > target.offsetWidth) {
+            target.style.maxWidth = 'none';
+            target.style.width = needed + 'px';
+        }
+
+        // Layout-Reflow abwarten
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+        const fullWidth = Math.max(target.scrollWidth, target.offsetWidth, needed);
+        const fullHeight = Math.max(target.scrollHeight, target.offsetHeight);
+
         const opts = {
             backgroundColor: '#ffffff',
             pixelRatio: 2,
             cacheBust: true,
-            // Inline alle Schriften und Bilder
-            skipFonts: false
+            skipFonts: false,
+            width: fullWidth,
+            height: fullHeight,
+            style: {
+                width: fullWidth + 'px',
+                height: fullHeight + 'px',
+                maxWidth: 'none'
+            }
         };
 
         let blob;
@@ -1037,8 +1138,6 @@ async function exportImage() {
         } else {
             blob = await htmlToImage.toBlob(target, opts);
         }
-
-        scrollEl.style.overflowX = originalOverflow;
 
         if (!blob) throw new Error('Leeres Bild empfangen.');
 
@@ -1072,6 +1171,10 @@ async function exportImage() {
         alert('Export fehlgeschlagen: ' + (err && err.message ? err.message : err));
         console.error('Export error:', err);
     } finally {
+        // Original-Styles wiederherstellen (auch bei Fehlern)
+        if (scrollEl) scrollEl.style.overflowX = orig.overflowX;
+        target.style.maxWidth = orig.targetMaxWidth;
+        target.style.width = orig.targetWidth;
         btn.disabled = false;
         btn.textContent = oldLabel;
     }

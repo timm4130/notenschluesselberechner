@@ -424,16 +424,16 @@
             </label>
             <select id="modus" onchange="onModusChange()">
                 <option value="linear" selected>Linear (gleichmäßige Punktverteilung)</option>
-                <option value="sockel-oben">Sockel oben (leichter)</option>
-                <option value="sockel-unten">Sockel unten (schwerer)</option>
+                <option value="sockel-oben">Sockel oben (großzügiger)</option>
+                <option value="sockel-unten">Sockel unten (strenger)</option>
                 <option value="kmk">KMK-Abiturvorgabe (nur Sek II)</option>
             </select>
         </div>
         <div class="info-panel full-row" id="modusInfo" hidden>
             <strong>Linear (gleichmäßige Punktverteilung):</strong> Punkte werden gleichmäßig verteilt; bei der Defizitschwelle wird scharf zwischen letzter ausreichender und erster mangelhafter Note geschnitten.<br>
-            <strong>Sockel oben (leichter):</strong> Die Bestnote wird schon ab einer großzügigen Schwelle vergeben (etwa ab 90 % der Punkte) – Schüler:innen können auch ohne Maximalpunktzahl die Bestnote erreichen.<br>
-            <strong>Sockel unten (schwerer):</strong> Die schlechteste Note wird nur bei sehr wenigen Punkten vergeben (z. B. unter 10 %); ansonsten verschiebt sich der Notenschlüssel etwas nach oben.<br>
-            <strong>KMK-Abiturvorgabe:</strong> Offizielle Vorgabe für Abiturklausuren in Sek II – feste Schwellen (95 %, 85 %, 75 %, 65 %, 55 %, 45 %, 20 %), Defizitschwelle ist auf 45 % fixiert.
+            <strong>Sockel oben (großzügiger bei der Bestnote):</strong> Die Bestnote wird schon ab ca. 90 % der Punkte vergeben. Die übrigen Noten verteilen sich linear über den Bereich darunter – Schüler:innen erreichen die 1 leichter, andere Noten rücken etwas dichter zusammen. Die Defizitschwelle wird in diesem Modus nicht ausgewertet.<br>
+            <strong>Sockel unten (strenger):</strong> Die schlechteste Note wird ausschließlich bei sehr wenigen Punkten vergeben (bis ca. 10 %). Die übrigen Noten verteilen sich linear über den Bereich darüber – das verschiebt alle Notengrenzen nach oben, der Schlüssel wird insgesamt strenger. Die Defizitschwelle wird in diesem Modus nicht ausgewertet.<br>
+            <strong>KMK-Abiturvorgabe:</strong> Offizielle Vorgabe für Abiturklausuren in Sek II – feste Schwellen (95 %, 90 %, 85 %, …, 27 %, 20 %), Defizitschwelle ist auf 45 % fixiert.
         </div>
         <div class="setting-item">
             <label>Max. Punkte</label>
@@ -699,95 +699,76 @@ function computeLinear(max, threshPct, accum, labels, passingCount) {
 
 // Sockel-Modus: harter Sockel oben (Bestnote ab X%) oder unten (schlechteste Note unter Y%)
 // Dazwischen lineare Verteilung über alle übrigen Stufen, mit Defizitschwelle als Knick.
-function computeSockel(max, threshPct, accum, labels, passingCount, sockelMode) {
+// Sockel-Modus nach Lehrerfreund-Logik (harter Sockel, OHNE Knick):
+// Die Defizitschwelle wird im Sockel-Modus ignoriert, der Schlüssel ist
+// komplett linear im verbleibenden Bereich.
+//
+// "oben"  = Bestnote ab Sockelschwelle (z.B. 90 % von max).
+//           Restliche Noten 2..n linear über 0..(sockelStart-1).
+//           → Bestnote leicht erreichbar, andere Noten dichter zusammen.
+// "unten" = Schlechteste Note bei 0..sockelTop (z.B. 10 % von max).
+//           Restliche Noten 1..(n-1) linear über (sockelTop+1)..max.
+//           → Strenger: alle Notengrenzen rutschen nach oben.
+function computeSockel(max, accum, labels, passingCount, sockelMode) {
     const totalValues = max + 1;
-    const failingCount = labels.length - passingCount;
+    const totalLevels = labels.length;
 
-    // Sockel-Schwellen
-    const SOCKEL_OBEN_PCT = 90; // Bestnote schon ab 90 %
-    const SOCKEL_UNTEN_PCT = 10; // schlechteste Note nur unter 10 %
+    const SOCKEL_OBEN_PCT = 90;
+    const SOCKEL_UNTEN_PCT = 10;
 
     if (sockelMode === 'oben') {
-        // Bestnote: alle Werte >= 90% von max
         const sockelStart = Math.ceil(max * SOCKEL_OBEN_PCT / 100);
-        const sockelSize = totalValues - sockelStart; // Werte sockelStart..max
-        // Defizitschwelle nach unten verschieben? Nein: Schwelle bleibt absolut.
-        let threshIdx = Math.ceil(max * threshPct / 100);
-        if (threshIdx > sockelStart - 1) threshIdx = sockelStart - 1;
-
-        const passingValues = sockelStart - threshIdx; // Werte threshIdx..sockelStart-1
-        const failingValues = threshIdx;
-
-        // Top-Note bekommt den Sockel; restliche passingCount-1 Stufen verteilen passingValues
-        const restPassing = passingCount - 1;
-        const passingSizes = restPassing > 0
-            ? distributeRange(passingValues, restPassing, accum)
-            : [];
-        const failingSizes = distributeRange(failingValues, failingCount, accum);
+        // Sub-Bereich für die übrigen Noten: 0..(sockelStart-1) = sockelStart Werte
+        const subValues = sockelStart;
+        const restLevels = totalLevels - 1;
+        const sizes = distributeRange(subValues, restLevels, accum);
 
         const ranges = [];
-        let highIdx = totalValues - 1;
-        // Top-Note (Sockel)
-        ranges.push({
-            label: labels[0],
-            lower: sockelStart,
-            upper: highIdx,
-            isPassing: true
-        });
-        highIdx = sockelStart - 1;
-        for (let i = 0; i < restPassing; i++) {
-            const size = passingSizes[i];
-            if (size <= 0) { ranges.push({ label: labels[i + 1], lower: null, upper: null, isPassing: true }); continue; }
+        // Note 1 bekommt den Sockel
+        ranges.push({ label: labels[0], lower: sockelStart, upper: max, isPassing: true });
+        let highIdx = sockelStart - 1;
+        for (let i = 0; i < restLevels; i++) {
+            const size = sizes[i];
+            const isPassing = (i + 1) < passingCount; // Index in labels: i+1
+            if (size <= 0) {
+                ranges.push({ label: labels[i + 1], lower: null, upper: null, isPassing });
+                continue;
+            }
             const lowIdx = highIdx - size + 1;
-            ranges.push({ label: labels[i + 1], lower: lowIdx, upper: highIdx, isPassing: true });
-            highIdx = lowIdx - 1;
-        }
-        for (let i = 0; i < failingCount; i++) {
-            const size = failingSizes[i];
-            if (size <= 0) { ranges.push({ label: labels[passingCount + i], lower: null, upper: null, isPassing: false }); continue; }
-            const lowIdx = highIdx - size + 1;
-            ranges.push({ label: labels[passingCount + i], lower: Math.max(lowIdx, 0), upper: highIdx, isPassing: false });
+            ranges.push({ label: labels[i + 1], lower: Math.max(lowIdx, 0), upper: highIdx, isPassing });
             highIdx = lowIdx - 1;
         }
         return ranges;
     }
 
     // sockelMode === 'unten'
-    // Schlechteste Note: alle Werte < 10 % (Sockel unten)
-    const sockelTop = Math.floor(max * SOCKEL_UNTEN_PCT / 100); // Werte 0..sockelTop-1 = schlechteste Note
-    const sockelSize = sockelTop; // Anzahl Werte für die schlechteste Note
-    let threshIdx = Math.ceil(max * threshPct / 100);
-    if (threshIdx < sockelTop) threshIdx = sockelTop;
-
-    const passingValues = totalValues - threshIdx;
-    const failingValues = threshIdx - sockelTop; // Werte sockelTop..threshIdx-1
-    const restFailing = failingCount - 1;
-
-    const passingSizes = distributeRange(passingValues, passingCount, accum);
-    const failingSizes = restFailing > 0 ? distributeRange(failingValues, restFailing, accum) : [];
+    const sockelTop = Math.floor(max * SOCKEL_UNTEN_PCT / 100);
+    // Sub-Bereich für die übrigen Noten: (sockelTop+1)..max
+    const subLow = sockelTop + 1;
+    const subValues = max - subLow + 1;
+    const restLevels = totalLevels - 1;
+    const sizes = distributeRange(subValues, restLevels, accum);
 
     const ranges = [];
-    let highIdx = totalValues - 1;
-    for (let i = 0; i < passingCount; i++) {
-        const size = passingSizes[i];
-        if (size <= 0) { ranges.push({ label: labels[i], lower: null, upper: null, isPassing: true }); continue; }
+    let highIdx = max;
+    for (let i = 0; i < restLevels; i++) {
+        const size = sizes[i];
+        const isPassing = i < passingCount;
+        if (size <= 0) {
+            ranges.push({ label: labels[i], lower: null, upper: null, isPassing });
+            continue;
+        }
         const lowIdx = highIdx - size + 1;
-        ranges.push({ label: labels[i], lower: lowIdx, upper: highIdx, isPassing: true });
+        ranges.push({ label: labels[i], lower: Math.max(lowIdx, subLow), upper: highIdx, isPassing });
         highIdx = lowIdx - 1;
     }
-    for (let i = 0; i < restFailing; i++) {
-        const size = failingSizes[i];
-        if (size <= 0) { ranges.push({ label: labels[passingCount + i], lower: null, upper: null, isPassing: false }); continue; }
-        const lowIdx = highIdx - size + 1;
-        ranges.push({ label: labels[passingCount + i], lower: Math.max(lowIdx, sockelTop), upper: highIdx, isPassing: false });
-        highIdx = lowIdx - 1;
-    }
-    // Schlechteste Note (Sockel unten)
-    if (sockelSize > 0) {
-        ranges.push({ label: labels[labels.length - 1], lower: 0, upper: sockelTop - 1, isPassing: false });
-    } else {
-        ranges.push({ label: labels[labels.length - 1], lower: null, upper: null, isPassing: false });
-    }
+    // Schlechteste Note (Sockel unten): 0..sockelTop
+    ranges.push({
+        label: labels[totalLevels - 1],
+        lower: sockelTop >= 0 ? 0 : null,
+        upper: sockelTop >= 0 ? sockelTop : null,
+        isPassing: false
+    });
     return ranges;
 }
 
@@ -840,9 +821,9 @@ function recalcAll() {
             ranges = computeKMK(max, labels);
         }
     } else if (modus === 'sockel-oben') {
-        ranges = computeSockel(max, threshPct, accum, labels, passingCount, 'oben');
+        ranges = computeSockel(max, accum, labels, passingCount, 'oben');
     } else if (modus === 'sockel-unten') {
-        ranges = computeSockel(max, threshPct, accum, labels, passingCount, 'unten');
+        ranges = computeSockel(max, accum, labels, passingCount, 'unten');
     } else {
         ranges = computeLinear(max, threshPct, accum, labels, passingCount);
     }
@@ -1011,9 +992,11 @@ function syncFieldStates() {
         tendenzItem.classList.remove('disabled');
     }
 
-    // Defizitschwelle: im KMK-Modus fix auf 45 % und ausgegraut
-    if (modus === 'kmk') {
-        defizitInput.value = 45;
+    // Defizitschwelle: im KMK- und Sockel-Modus nicht relevant (Bestehensgrenze
+    // ergibt sich automatisch aus der Modus-Logik)
+    const sockelOrKmk = (modus === 'kmk' || modus === 'sockel-oben' || modus === 'sockel-unten');
+    if (sockelOrKmk) {
+        if (modus === 'kmk') defizitInput.value = 45;
         defizitInput.disabled = true;
         defizitItem.classList.add('disabled');
     } else {

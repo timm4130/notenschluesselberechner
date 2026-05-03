@@ -526,6 +526,12 @@
                 <span class="value-out" id="colWidthOut">50 px</span>
             </div>
         </div>
+        <div class="setting-item full-row checkbox-item" id="sek1EqWrap">
+            <label class="checkbox-label">
+                <input type="checkbox" id="sek1Equivalence" checked onchange="recalcAll()">
+                <span>Sek-I-Entsprechung bei runden Noten anzeigen <small style="opacity:0.65">(nur Sek II)</small></span>
+            </label>
+        </div>
         <div class="setting-item">
             <label>Kopfzeile-Farbe</label>
             <select id="headerMode" onchange="updateLayout()">
@@ -636,13 +642,16 @@ function getLevels(stufe, tendenz) {
         };
     }
     // Sek2: 15 ... 0 — Wortbeschriftung NUR an "ganzen" Noten (14, 11, 8, 5, 2, 0)
+    // und nur wenn die Sek-I-Entsprechung-Checkbox aktiv ist
+    const eqCB = document.getElementById('sek1Equivalence');
+    const showEq = eqCB ? eqCB.checked : true;
     const sek2Words = {
         14: 'sehr gut', 11: 'gut', 8: 'befriedigend',
         5: 'ausreichend', 2: 'mangelhaft', 0: 'ungenügend'
     };
     const labels = [];
     for (let i = 15; i >= 0; i--) {
-        labels.push(sek2Words[i] ? `${i} (${sek2Words[i]})` : String(i));
+        labels.push(showEq && sek2Words[i] ? `${i} (${sek2Words[i]})` : String(i));
     }
     return { labels, passingCount: 11 }; // 15..5 passing, 4..0 fail
 }
@@ -1010,6 +1019,19 @@ function syncFieldStates() {
     } else {
         defizitInput.disabled = false;
         defizitItem.classList.remove('disabled');
+    }
+
+    // Sek-I-Entsprechung: nur in Sek II relevant
+    const eqCB = document.getElementById('sek1Equivalence');
+    const eqWrap = document.getElementById('sek1EqWrap');
+    if (eqCB && eqWrap) {
+        if (stufe === 'sek2') {
+            eqCB.disabled = false;
+            eqWrap.classList.remove('disabled');
+        } else {
+            eqCB.disabled = true;
+            eqWrap.classList.add('disabled');
+        }
     }
 }
 
